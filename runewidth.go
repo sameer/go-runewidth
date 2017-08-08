@@ -1,5 +1,7 @@
 package runewidth
 
+import "github.com/hashicorp/golang-lru"
+
 var (
 	// EastAsianWidth will be set true if the current locale is CJK
 	EastAsianWidth = IsEastAsian()
@@ -24,7 +26,9 @@ func inTables(r rune, ts ...table) bool {
 	return false
 }
 
-func inTable(r rune, t table) bool {
+var tableCaches = map[*table]*lru.Cache{}
+
+func inTableNaive(r rune, t table) bool {
 	// func (t table) IncludesRune(r rune) bool {
 	if r < t[0].first {
 		return false
@@ -46,6 +50,20 @@ func inTable(r rune, t table) bool {
 	}
 
 	return false
+}
+
+func inTable(r rune, t table) bool {
+	tableCache, found := tableCaches[&t]
+	if !found {
+		tableCache, _ = lru.New(128)
+		tableCaches[&t] = tableCache
+	}
+	isInTable, isInCache := tableCache.Get(r)
+	if !isInCache {
+		isInTable = inTableNaive(r, t)
+		tableCache.Add(&t, isInTable)
+	}
+	return isInTable.(bool)
 }
 
 var private = table{
