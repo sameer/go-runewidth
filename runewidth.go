@@ -3,7 +3,8 @@ package runewidth
 import "container/list"
 
 /*
-#include <wcwidth.h>
+#include "xterm/wcwidth.c"
+
 */
 import "C"
 
