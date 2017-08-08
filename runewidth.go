@@ -1,13 +1,13 @@
 package runewidth
 
-import "github.com/hashicorp/golang-lru"
+import "container/list"
 
 var (
 	// EastAsianWidth will be set true if the current locale is CJK
 	EastAsianWidth = IsEastAsian()
 
 	// DefaultCondition is a condition in current locale
-	DefaultCondition = &Condition{EastAsianWidth}
+	DefaultCondition = &Condition{EastAsianWidth: EastAsianWidth}
 )
 
 type interval struct {
@@ -26,9 +26,7 @@ func inTables(r rune, ts ...table) bool {
 	return false
 }
 
-var tableCaches = map[*table]*lru.Cache{}
-
-func inTableNaive(r rune, t table) bool {
+func inTable(r rune, t table) bool {
 	// func (t table) IncludesRune(r rune) bool {
 	if r < t[0].first {
 		return false
@@ -50,20 +48,6 @@ func inTableNaive(r rune, t table) bool {
 	}
 
 	return false
-}
-
-func inTable(r rune, t table) bool {
-	tableCache, found := tableCaches[&t]
-	if !found {
-		tableCache, _ = lru.New(128)
-		tableCaches[&t] = tableCache
-	}
-	isInTable, isInCache := tableCache.Get(r)
-	if !isInCache {
-		isInTable = inTableNaive(r, t)
-		tableCache.Add(&t, isInTable)
-	}
-	return isInTable.(bool)
 }
 
 var private = table{
@@ -1099,26 +1083,55 @@ var neutral = table{
 // Condition have flag EastAsianWidth whether the current locale is CJK or not.
 type Condition struct {
 	EastAsianWidth bool
+	last           *list.List
+}
+
+type runeWidthInfo struct {
+	R rune
+	W int
 }
 
 // NewCondition return new instance of Condition which is current locale.
 func NewCondition() *Condition {
-	return &Condition{EastAsianWidth}
+	return &Condition{EastAsianWidth: EastAsianWidth}
 }
 
 // RuneWidth returns the number of cells in r.
 // See http://www.unicode.org/reports/tr11/
 func (c *Condition) RuneWidth(r rune) int {
-	switch {
-	case r < 0 || r > 0x10FFFF ||
-		inTables(r, nonprint, combining, notassigned):
-		return 0
-	case (c.EastAsianWidth && IsAmbiguousWidth(r)) ||
-		inTables(r, doublewidth, emoji):
-		return 2
-	default:
-		return 1
+	var rwInfo *runeWidthInfo = nil
+	found := false
+	if c.last == nil {
+		c.last = list.New()
 	}
+	for e := c.last.Front(); e != nil; e = e.Next() {
+		if e.Value.(*runeWidthInfo).R == r {
+			found = true
+			rwInfo = e.Value.(*runeWidthInfo)
+			c.last.MoveToFront(e)
+			break
+		}
+	}
+	if !found {
+		rwInfo = &runeWidthInfo{R: r, W: 0}
+		switch {
+		case r < 0 || r > 0x10FFFF ||
+			inTables(r, nonprint, combining, notassigned):
+			break
+		case (c.EastAsianWidth && IsAmbiguousWidth(r)) ||
+			inTables(r, doublewidth, emoji):
+			rwInfo.W = 2
+			break
+		default:
+			rwInfo.W = 1
+			break
+		}
+		c.last.PushFront(rwInfo)
+	}
+	if c.last.Len() > 128 { // ASCII table length
+		c.last.Remove(c.last.Back())
+	}
+	return rwInfo.W
 }
 
 // StringWidth return width as you can see
